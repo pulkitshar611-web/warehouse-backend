@@ -123,7 +123,13 @@ async function start() {
         }
       }
     }
-    await sequelize.sync({ alter: true });
+    if (sequelize.getDialect() === "sqlite") {
+      await sequelize.sync({ alter: true }); // ✅ Local SQLite
+    } else {
+      await sequelize.sync(); // ✅ Railway MySQL (NO alter)
+    }
+
+
     if (dialect === 'sqlite') {
       await sequelize.query('PRAGMA foreign_keys = ON');
     }
