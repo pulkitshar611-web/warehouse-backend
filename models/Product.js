@@ -9,6 +9,7 @@ const Product = sequelize.define('Product', {
   sku: { type: DataTypes.STRING, allowNull: false },
   barcode: { type: DataTypes.STRING },
   description: { type: DataTypes.TEXT, allowNull: true },
+  color: { type: DataTypes.STRING, allowNull: true },
   productType: { type: DataTypes.STRING, allowNull: true },
   unitOfMeasure: { type: DataTypes.STRING, allowNull: true },
   price: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },

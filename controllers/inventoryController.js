@@ -42,6 +42,9 @@ async function bulkCreateProducts(req, res, next) {
 
 async function updateProduct(req, res, next) {
   try {
+    console.log(`[DEBUG] Update Product Payload ID=${req.params.id}:`, JSON.stringify(req.body, null, 2));
+    if (req.body.color) console.log(`[DEBUG] Color field present: "${req.body.color}"`);
+    else console.log('[DEBUG] Color field MISSING or EMPTY in payload');
     const data = await inventoryService.updateProduct(req.params.id, req.body, req.user);
     res.json({ success: true, data });
   } catch (err) {
@@ -205,6 +208,16 @@ async function createCycleCount(req, res, next) {
   }
 }
 
+
+async function completeCycleCount(req, res, next) {
+  try {
+    const data = await inventoryService.completeCycleCount(req.params.id, req.body, req.user);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listBatches(req, res, next) {
   try {
     const data = await inventoryService.listBatches(req.user, req.query);
@@ -325,6 +338,7 @@ module.exports = {
   createAdjustment,
   listCycleCounts,
   createCycleCount,
+  completeCycleCount,
   listBatches,
   getBatch,
   createBatch,

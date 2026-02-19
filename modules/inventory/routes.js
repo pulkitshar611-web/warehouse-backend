@@ -30,6 +30,7 @@ router.post('/adjustments', requireRole('super_admin', 'company_admin', 'invento
 
 router.get('/cycle-counts', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'viewer'), inventoryController.listCycleCounts);
 router.post('/cycle-counts', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), inventoryController.createCycleCount);
+router.post('/cycle-counts/:id/complete', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), inventoryController.completeCycleCount);
 
 router.get('/batches', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'viewer'), inventoryController.listBatches);
 router.get('/batches/:id', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'viewer'), inventoryController.getBatch);

@@ -7,12 +7,13 @@ const SALT_ROUNDS = 10;
 async function seed() {
   try {
     await sequelize.authenticate();
-    await sequelize.sync({ alter: true });
-
     const reset = process.argv.includes('--reset');
     if (reset) {
       await sequelize.sync({ force: true });
       console.log('Database reset (all tables recreated).');
+    } else {
+      // Create tables if missing; no alter so SQLite FK stays valid
+      await sequelize.sync();
     }
 
     const existingSuperAdmin = await User.findOne({ where: { email: 'admin@kiaan-wms.com' } });

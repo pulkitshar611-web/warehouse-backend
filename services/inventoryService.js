@@ -46,6 +46,8 @@ async function listProducts(reqUser, query = {}) {
     where[Op.or] = [
       { name: { [Op.like]: `%${query.search}%` } },
       { sku: { [Op.like]: `%${query.search}%` } },
+      { barcode: { [Op.like]: `%${query.search}%` } },
+      { color: { [Op.like]: `%${query.search}%` } },
     ];
   }
   const products = await Product.findAll({
@@ -99,7 +101,7 @@ async function createProduct(data, reqUser) {
   if (!companyId) throw new Error('companyId required');
   const existing = await Product.findOne({ where: { companyId, sku: data.sku.trim() } });
   if (existing) throw new Error('SKU already exists for this company');
-  const created = await Product.create({
+  const payload = {
     companyId,
     categoryId: data.categoryId || null,
     supplierId: data.supplierId || null,
@@ -107,6 +109,7 @@ async function createProduct(data, reqUser) {
     sku: data.sku.trim(),
     barcode: data.barcode || null,
     description: data.description || null,
+    color: data.color || null,
     productType: data.productType || null,
     unitOfMeasure: data.unitOfMeasure || null,
     price: data.price ?? 0,
@@ -134,7 +137,9 @@ async function createProduct(data, reqUser) {
     priceLists: data.priceLists && typeof data.priceLists === 'object' ? data.priceLists : null,
     supplierProducts: Array.isArray(data.supplierProducts) ? data.supplierProducts : null,
     alternativeSkus: Array.isArray(data.alternativeSkus) ? data.alternativeSkus : null,
-  });
+  };
+  console.log('[DEBUG_SERVICE] Creating Product Payload:', JSON.stringify(payload, null, 2));
+  const created = await Product.create(payload);
   return normalizeProductJson(created);
 }
 
@@ -170,6 +175,7 @@ async function bulkCreateProducts(productsArray, reqUser) {
         sku: String(data.sku).trim(),
         barcode: data.barcode ? String(data.barcode).trim() : null,
         description: data.description ? String(data.description).trim() : null,
+        color: data.color ? String(data.color).trim() : null,
         productType: data.productType || null,
         unitOfMeasure: data.unitOfMeasure || null,
         price: data.price != null ? Number(data.price) : 0,
@@ -193,7 +199,7 @@ async function bulkCreateProducts(productsArray, reqUser) {
         maxStock: data.maxStock != null ? Number(data.maxStock) : null,
         status: data.status && String(data.status).toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
         images: null,
-        cartons: null,
+        cartons: Array.isArray(data.cartons) && data.cartons.length > 0 ? data.cartons : null,
         priceLists: null,
         supplierProducts: null,
         alternativeSkus: null,
@@ -219,6 +225,10 @@ async function updateProduct(id, data, reqUser) {
   if (data.sku !== undefined) upd.sku = data.sku?.trim() ?? product.sku;
   if (data.barcode !== undefined) upd.barcode = data.barcode;
   if (data.description !== undefined) upd.description = data.description;
+  if (data.color !== undefined) {
+    console.log(`[DEBUG_SERVICE] Updating color to: "${data.color}"`);
+    upd.color = data.color;
+  }
   if (data.productType !== undefined) upd.productType = data.productType;
   if (data.unitOfMeasure !== undefined) upd.unitOfMeasure = data.unitOfMeasure;
   if (data.price !== undefined) upd.price = data.price;
@@ -247,6 +257,7 @@ async function updateProduct(id, data, reqUser) {
   if (data.supplierProducts !== undefined) upd.supplierProducts = Array.isArray(data.supplierProducts) ? data.supplierProducts : product.supplierProducts;
   if (data.alternativeSkus !== undefined) upd.alternativeSkus = Array.isArray(data.alternativeSkus) ? data.alternativeSkus : product.alternativeSkus;
   if (Object.keys(upd).length === 0) return normalizeProductJson(product);
+  console.log('[DEBUG_SERVICE] Final Update Object:', JSON.stringify(upd, null, 2));
   await product.update(upd);
   const updated = await Product.findByPk(id, {
     include: [
@@ -356,6 +367,12 @@ async function createStock(data, reqUser) {
   const product = await Product.findByPk(data.productId);
   if (!product) throw new Error('Product not found');
   if (reqUser.role !== 'super_admin' && product.companyId !== reqUser.companyId) throw new Error('Product not found');
+
+  if (data.warehouseId && data.quantity > 0) {
+    const warehouseService = require('./warehouseService');
+    await warehouseService.validateCapacity(data.warehouseId, data.quantity);
+  }
+
   const stock = await ProductStock.create({
     productId: data.productId,
     warehouseId: data.warehouseId,
@@ -384,6 +401,12 @@ async function updateStock(stockId, data, reqUser) {
     throw new Error('Not allowed');
   }
   if (stock.Product.companyId !== reqUser.companyId && reqUser.role !== 'super_admin') throw new Error('Stock not found');
+
+  if (data.quantity !== undefined && data.quantity > stock.quantity) {
+    const warehouseService = require('./warehouseService');
+    await warehouseService.validateCapacity(stock.warehouseId, data.quantity - stock.quantity);
+  }
+
   await stock.update({
     quantity: data.quantity !== undefined ? data.quantity : stock.quantity,
     reserved: data.reserved !== undefined ? data.reserved : stock.reserved,
@@ -465,7 +488,7 @@ async function listStockByLocation(reqUser, query = {}) {
       byLoc[locId] = {
         locationId: locId || null,
         locationName: loc?.name || 'Unassigned',
-        locationCode: loc?.code || '—',
+        locationCode: loc?.code || loc?.name || '',
         locationType: loc?.locationType || '—',
         zoneName: loc?.Zone?.name || loc?.Zone?.code || '—',
         properties: loc?.heatSensitive === 'yes' ? 'Hot Location' : (loc?.heatSensitive ? String(loc.heatSensitive) : '—'),
@@ -492,7 +515,8 @@ function generateAdjustmentReference() {
 
 async function listAdjustments(reqUser, query = {}) {
   const where = {};
-  if (reqUser.role !== 'super_admin') where.companyId = reqUser.companyId;
+  const role = (reqUser.role || '').toString().toLowerCase().replace(/-/g, '_');
+  if (role !== 'super_admin' && reqUser.companyId) where.companyId = reqUser.companyId;
   if (query.type) where.type = query.type;
   if (query.status) where.status = query.status;
   if (query.search) {
@@ -521,19 +545,28 @@ async function listAdjustments(reqUser, query = {}) {
 }
 
 async function createAdjustment(data, reqUser) {
-  if (reqUser.role !== 'super_admin' && reqUser.role !== 'company_admin' && reqUser.role !== 'inventory_manager') {
+  const role = (reqUser.role || '').toString().toLowerCase().replace(/-/g, '_');
+  if (role !== 'super_admin' && role !== 'company_admin' && role !== 'inventory_manager') {
     throw new Error('Not allowed to create adjustment');
   }
   const companyId = reqUser.companyId || data.companyId;
-  if (!companyId) throw new Error('Company context required');
+  if (!companyId && role !== 'super_admin') throw new Error('Company context required');
+  const effectiveCompanyId = companyId || (await Product.findByPk(data.productId).then(p => p?.companyId));
+  if (!effectiveCompanyId) throw new Error('Company context required');
   const product = await Product.findByPk(data.productId);
   if (!product) throw new Error('Product not found');
-  if (product.companyId !== companyId && reqUser.role !== 'super_admin') throw new Error('Product not found');
+  if (effectiveCompanyId && product.companyId !== effectiveCompanyId && role !== 'super_admin') throw new Error('Product not found');
   const qty = Math.abs(parseInt(data.quantity, 10) || 0);
   if (qty < 1) throw new Error('Quantity must be at least 1');
   const type = (data.type || '').toUpperCase() === 'DECREASE' ? 'DECREASE' : 'INCREASE';
   const referenceNumber = generateAdjustmentReference();
   let warehouseId = data.warehouseId || null;
+
+  if (type === 'INCREASE' && warehouseId) {
+    const warehouseService = require('./warehouseService');
+    await warehouseService.validateCapacity(warehouseId, qty);
+  }
+
   const stockWhere = { productId: data.productId };
   if (warehouseId) stockWhere.warehouseId = warehouseId;
   let stock = await ProductStock.findOne({ where: stockWhere });
@@ -546,7 +579,7 @@ async function createAdjustment(data, reqUser) {
   }
   const adjustment = await InventoryAdjustment.create({
     referenceNumber,
-    companyId,
+    companyId: effectiveCompanyId,
     productId: data.productId,
     warehouseId: warehouseId || (stock && stock.warehouseId) || null,
     type,
@@ -562,7 +595,7 @@ async function createAdjustment(data, reqUser) {
   } else if (type === 'INCREASE') {
     if (!warehouseId) {
       const { Warehouse } = require('../models');
-      const firstWarehouse = await Warehouse.findOne({ where: { companyId } });
+      const firstWarehouse = await Warehouse.findOne({ where: { companyId: effectiveCompanyId } });
       if (!firstWarehouse) throw new Error('No warehouse found for company');
       warehouseId = firstWarehouse.id;
       await ProductStock.create({
@@ -649,6 +682,133 @@ async function createCycleCount(data, reqUser) {
   });
 }
 
+
+async function completeCycleCount(id, data, reqUser) {
+  if (reqUser.role !== 'super_admin' && reqUser.role !== 'company_admin' && reqUser.role !== 'inventory_manager') {
+    throw new Error('Not allowed to complete cycle count');
+  }
+
+  const count = await CycleCount.findByPk(id);
+  if (!count) throw new Error('Cycle count not found');
+  if (count.status === 'COMPLETED') throw new Error('Cycle count already completed');
+
+  if (reqUser.role !== 'super_admin' && count.companyId !== reqUser.companyId) {
+    throw new Error('Cycle count not found');
+  }
+
+  // data.products = [{ productId, countedQty }]
+  const products = Array.isArray(data.products) ? data.products : [];
+  let discrepancies = 0;
+  let itemsCount = 0;
+
+  const transaction = await sequelize.transaction();
+  try {
+    for (const p of products) {
+      const pid = p.productId;
+      const counted = parseInt(p.countedQty, 10) || 0;
+      itemsCount++;
+
+      // Find current system stock
+      // We assume CycleCount is for a specific location (count.locationId)
+      // If count.locationId is null, it might be a "Whole Warehouse" or "Spot" count?
+      // For simplicity, if locationId is present, we adjust stock AT THAT LOCATION.
+      // If locationId is NULL, we might skip or fail? 
+      // The UI requires locationId for creating cycle count usually, or it's optional?
+      // In createCycleCount it says locationId || null.
+      // If null, we can't easily auto-adjust stock because we don't know WHERE.
+      // Let's assume locationId is REQUIRED for auto-adjustment for now, or throw error if missing.
+
+      if (!count.locationId) {
+        // If no location, we can't auto-adjust specific records. Just complete the count.
+        continue;
+      }
+
+      // Find stock at this location
+      // Note: A product might have multiple stocks at same location if Batches exist.
+      // This logic is tricky if batches exist.
+      // Simplified: We sum up all batches at this location for this product to compare?
+      // usage: "Blind Count". User counts 10 units of Product A. System says 8.
+      // We need to adjust. Which batch? 
+      // If we don't support batch scanning in cycle count, we might default to no-batch or oldest batch?
+      // Or we just update the "No Batch" record?
+      // Let's try to find a stock record without batch first (or any).
+      // Ideally, the "Input" should specify Batch if relevant.
+      // For now, let's assume standard stock (null batch) or generic adjustment.
+
+      const where = {
+        productId: pid,
+        locationId: count.locationId,
+        warehouseId: (await (require('../models').Location).findByPk(count.locationId)).warehouseId
+      };
+
+      // Aggregated check if multiple batches?
+      // For this implementation, let's match exact batch if provided in input, else match 'null' batch?
+      // Or simpler: The user input should ideally match existing structure.
+      // Let's stick to: Update Total Quantity at Location. 
+      // If multiple batches exist, this gets complex. 
+      // Plan: If Multiple Batches, we can't easily guess. 
+      // For this fix: Assume non-batched or user selects 'No Batch'.
+      // If user sends batchId/Number, use it.
+
+      if (p.batchNumber) where.batchNumber = p.batchNumber;
+
+      let stock = await ProductStock.findOne({ where, transaction });
+      const systemQty = stock ? stock.quantity : 0;
+      const diff = counted - systemQty;
+
+      if (diff !== 0) {
+        discrepancies++;
+        // Create Adjustment
+        const type = diff > 0 ? 'INCREASE' : 'DECREASE';
+        const qty = Math.abs(diff);
+
+        await InventoryAdjustment.create({
+          referenceNumber: generateAdjustmentReference(),
+          companyId: count.companyId,
+          productId: pid,
+          warehouseId: where.warehouseId,
+          type,
+          quantity: qty,
+          reason: `Cycle Count #${count.referenceNumber}`,
+          notes: 'Auto-adjustment from cycle count',
+          status: 'COMPLETED',
+          createdBy: reqUser.id
+        }, { transaction });
+
+        // Update Stock
+        if (stock) {
+          await stock.increment('quantity', { by: diff, transaction });
+        } else if (diff > 0) {
+          await ProductStock.create({
+            ...where,
+            quantity: diff,
+            status: 'ACTIVE'
+          }, { transaction });
+        }
+      }
+    }
+
+    await count.update({
+      status: 'COMPLETED',
+      itemsCount,
+      discrepancies,
+      countedBy: reqUser.id
+    }, { transaction });
+
+    await transaction.commit();
+    return CycleCount.findByPk(id, {
+      include: [
+        { association: 'Location' },
+        { association: 'countedByUser' }
+      ]
+    });
+
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+}
+
 async function listBatches(reqUser, query = {}) {
   const where = {};
   if (reqUser.role !== 'super_admin') where.companyId = reqUser.companyId;
@@ -686,6 +846,9 @@ async function createBatch(data, reqUser) {
   const product = await Product.findByPk(data.productId);
   if (!product) throw new Error('Product not found');
   if (product.companyId !== companyId && reqUser.role !== 'super_admin') throw new Error('Product not found');
+  /* 
+   * [MODIFIED] Now also creates/updates ProductStock so batch inventory is live.
+   */
   const batch = await Batch.create({
     companyId,
     batchNumber: data.batchNumber || String(Date.now()),
@@ -701,6 +864,37 @@ async function createBatch(data, reqUser) {
     supplierId: data.supplierId || null,
     status: 'ACTIVE',
   });
+
+  if (batch.quantity > 0 && batch.warehouseId) {
+    const warehouseService = require('./warehouseService');
+    await warehouseService.validateCapacity(batch.warehouseId, batch.quantity);
+  }
+
+  // Sync with ProductStock if quantity > 0
+  if (batch.quantity > 0) {
+    const stockQty = batch.quantity;
+    const stockWhere = {
+      productId: batch.productId,
+      warehouseId: batch.warehouseId,
+      locationId: batch.locationId || null,
+      batchNumber: batch.batchNumber,
+    };
+
+    // Check if stock exists matching this batch
+    let stock = await ProductStock.findOne({ where: stockWhere });
+    if (stock) {
+      await stock.increment('quantity', { by: stockQty });
+    } else {
+      await ProductStock.create({
+        ...stockWhere,
+        quantity: stockQty,
+        reserved: 0,
+        status: 'ACTIVE',
+        expiryDate: batch.expiryDate, // Sync expiry if possible, though model might need update
+      });
+    }
+  }
+
   return getBatchById(batch.id, reqUser);
 }
 
@@ -784,19 +978,125 @@ async function createMovement(data, reqUser) {
   const product = await Product.findByPk(data.productId);
   if (!product) throw new Error('Product not found');
   if (product.companyId !== companyId && reqUser.role !== 'super_admin') throw new Error('Product not found');
-  const movement = await Movement.create({
-    companyId,
-    type: data.type || 'TRANSFER',
-    productId: data.productId,
-    batchId: data.batchId || null,
-    fromLocationId: data.fromLocationId || null,
-    toLocationId: data.toLocationId || null,
-    quantity: parseInt(data.quantity, 10) || 0,
-    reason: data.reason || null,
-    notes: data.notes || null,
-    createdBy: reqUser.id,
-  });
-  return getMovementById(movement.id, reqUser);
+  const qty = parseInt(data.quantity, 10) || 0;
+  if (qty <= 0) throw new Error('Quantity must be greater than 0');
+
+  const type = data.type || 'TRANSFER';
+  const batchId = data.batchId || null;
+  let batchNumber = null;
+
+  if (batchId) {
+    const b = await Batch.findByPk(batchId);
+    if (b) batchNumber = b.batchNumber;
+  }
+
+  const transaction = await sequelize.transaction();
+
+  try {
+    // 1. Log the Movement
+    const movement = await Movement.create({
+      companyId,
+      type,
+      productId: data.productId,
+      batchId,
+      fromLocationId: data.fromLocationId || null,
+      toLocationId: data.toLocationId || null,
+      quantity: qty,
+      reason: data.reason || null,
+      notes: data.notes || null,
+      createdBy: reqUser.id,
+    }, { transaction });
+
+    // 2. Adjust Stock based on Type
+    /*
+      RECEIVE/RETURN: Add to ToLocation
+      PICK: Subtract from FromLocation
+      TRANSFER: Subtract from FromLocation, Add to ToLocation
+      ADJUST: (Handled via Adjustments usually, but if used here, implies manual +/- ?)
+              Let's assume ADJUST here is just logging or behaves like Transfer if both locs exist? 
+              For safety, we will restrict ADJUST to use createAdjustment API. 
+              But if user uses this UI, we support:
+              - If only ToLocation -> Add
+              - If only FromLocation -> Subtract
+    */
+
+    // Helper to Add Stock
+    const addStock = async (locId, q, batchNum) => {
+      if (!locId) throw new Error('Destination location required');
+      const loc = await (require('../models').Location).findByPk(locId);
+      if (!loc) throw new Error(`Location ${locId} not found`);
+
+      const warehouseService = require('./warehouseService');
+      await warehouseService.validateCapacity(loc.warehouseId, q, { transaction });
+
+      const where = {
+        productId: data.productId,
+        warehouseId: loc.warehouseId, // Use resolved warehouseId
+        locationId: locId,
+        batchNumber: batchNum || null
+      };
+
+      // We need to resolve warehouseId efficiently. 
+      // Assuming Location belongs to a Warehouse.
+      // Optimisation: movement creates usually pass warehouse context? No, just loc IDs.
+      // Let's look up location.
+
+      // Check if stock exists
+      // Note: ProductStock unique key is usually product+warehouse+location+batch
+      // We need to be careful with "null" batchNumber in where clause if DB treats it uniquely.
+      // Sequelize "where: { batchNumber: null }" works for finding NULLs.
+
+      let stock = await ProductStock.findOne({ where, transaction });
+      if (stock) {
+        await stock.increment('quantity', { by: q, transaction });
+      } else {
+        await ProductStock.create({
+          ...where,
+          quantity: q,
+          status: 'ACTIVE'
+        }, { transaction });
+      }
+    };
+
+    // Helper to Remove Stock
+    const removeStock = async (locId, q, batchNum) => {
+      if (!locId) throw new Error('Source location required');
+      // Resolve warehouse from location
+      const loc = await (require('../models').Location).findByPk(locId);
+      if (!loc) throw new Error(`Location ${locId} not found`);
+
+      const where = {
+        productId: data.productId,
+        warehouseId: loc.warehouseId,
+        locationId: locId,
+        batchNumber: batchNum || null
+      };
+
+      const stock = await ProductStock.findOne({ where, transaction });
+      if (!stock || (stock.quantity < q)) {
+        throw new Error(`Insufficient stock at location ${loc.name || loc.code}`);
+      }
+      await stock.decrement('quantity', { by: q, transaction });
+    };
+
+    if (type === 'RECEIVE' || type === 'RETURN') {
+      await addStock(data.toLocationId, qty, batchNumber);
+    }
+    else if (type === 'PICK') {
+      await removeStock(data.fromLocationId, qty, batchNumber);
+    }
+    else if (type === 'TRANSFER') {
+      await removeStock(data.fromLocationId, qty, batchNumber);
+      await addStock(data.toLocationId, qty, batchNumber);
+    }
+
+    await transaction.commit();
+    return getMovementById(movement.id, reqUser);
+
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
 }
 
 async function getMovementById(id, reqUser) {
@@ -863,6 +1163,7 @@ module.exports = {
   createAdjustment,
   listCycleCounts,
   createCycleCount,
+  completeCycleCount,
   listBatches,
   createBatch,
   getBatchById,

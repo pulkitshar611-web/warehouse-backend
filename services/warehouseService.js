@@ -73,4 +73,24 @@ async function remove(id, reqUser) {
   return { message: 'Warehouse deleted' };
 }
 
-module.exports = { list, getById, create, update, remove };
+async function validateCapacity(warehouseId, incomingQty, options = {}) {
+  const { ProductStock } = require('../models');
+  const wh = await Warehouse.findByPk(warehouseId);
+  if (!wh) throw new Error('Warehouse not found');
+
+  // If no capacity is set, skip validation
+  if (wh.capacity == null || wh.capacity <= 0) return true;
+
+  // Calculate current total stock in this warehouse
+  const currentStock = await ProductStock.sum('quantity', {
+    where: { warehouseId },
+    transaction: options.transaction
+  }) || 0;
+
+  if (currentStock + incomingQty > wh.capacity) {
+    throw new Error(`Warehouse capacity exceeded. Current: ${currentStock}, Incoming: ${incomingQty}, Max: ${wh.capacity}. Warehouse: ${wh.name} (${wh.code})`);
+  }
+  return true;
+}
+
+module.exports = { list, getById, create, update, remove, validateCapacity };

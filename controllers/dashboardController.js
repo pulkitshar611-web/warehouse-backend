@@ -40,15 +40,15 @@ async function stats(req, res, next) {
       SalesOrder.count({ where: baseWhere }),
       companyId
         ? PickList.count({
-            where: { status: { [Op.in]: ['pending', 'in_progress'] } },
-            include: [{ association: 'SalesOrder', where: { companyId }, required: true, attributes: [] }],
-          })
+          where: { status: { [Op.in]: ['pending', 'in_progress'] } },
+          include: [{ association: 'SalesOrder', where: { companyId }, required: true, attributes: [] }],
+        })
         : PickList.count({ where: { status: { [Op.in]: ['pending', 'in_progress'] } } }),
       companyId
         ? PackingTask.count({
-            where: { status: { [Op.in]: ['pending', 'packing'] } },
-            include: [{ association: 'SalesOrder', where: { companyId }, required: true, attributes: [] }],
-          })
+          where: { status: { [Op.in]: ['pending', 'packing'] } },
+          include: [{ association: 'SalesOrder', where: { companyId }, required: true, attributes: [] }],
+        })
         : PackingTask.count({ where: { status: { [Op.in]: ['pending', 'packing'] } } }),
     ]);
 
@@ -106,6 +106,10 @@ async function stats(req, res, next) {
  * GET /api/dashboard/charts
  * Returns chart-ready data: ordersByDay, ordersByStatus, stockByWarehouse, topProducts
  */
+/**
+ * GET /api/dashboard/charts
+ * Returns chart-ready data: ordersByDay, ordersByStatus, stockByWarehouse, topProducts (by sales)
+ */
 async function charts(req, res, next) {
   try {
     const user = req.user;
@@ -115,84 +119,105 @@ async function charts(req, res, next) {
     }
     const baseWhere = companyId ? { companyId } : {};
 
-    const daysBack = 14;
+    // Use query param for days back or default to 30
+    const daysBack = req.query.days ? parseInt(req.query.days, 10) : 30;
     const startDate = new Date();
     startDate.setHours(0, 0, 0, 0);
     startDate.setDate(startDate.getDate() - daysBack);
 
-    const [orders, warehouses, productStocks] = await Promise.all([
-      SalesOrder.findAll({
-        where: { ...baseWhere, createdAt: { [Op.gte]: startDate } },
-        attributes: ['id', 'status', 'totalAmount', 'createdAt'],
-        raw: true,
-      }),
-      Warehouse.findAll({
-        where: baseWhere,
-        attributes: ['id', 'name'],
-        raw: true,
-      }),
-      ProductStock.findAll({
-        include: [{
-          model: Warehouse,
-          as: 'Warehouse',
-          attributes: ['id', 'name'],
-          required: true,
-          ...(companyId ? { where: { companyId } } : {}),
-        }, {
-          model: Product,
-          as: 'Product',
-          attributes: ['id', 'name', 'sku'],
-          required: true,
-          ...(companyId ? { where: { companyId } } : {}),
-        }],
-        raw: true,
-      }),
-    ]);
-
-    const whMap = {};
-    (warehouses || []).forEach((w) => { whMap[w.id] = w.name; });
-
-    const dateMap = {};
-    (orders || []).forEach((o) => {
-      const d = o.createdAt ? new Date(o.createdAt).toISOString().slice(0, 10) : null;
-      if (!d) return;
-      if (!dateMap[d]) dateMap[d] = { date: d, count: 0, totalAmount: 0 };
-      dateMap[d].count += 1;
-      dateMap[d].totalAmount += Number(o.totalAmount) || 0;
+    // Fetch Orders for Sales Trend
+    const orders = await SalesOrder.findAll({
+      where: { ...baseWhere, createdAt: { [Op.gte]: startDate } },
+      attributes: ['id', 'status', 'totalAmount', 'createdAt'],
+      raw: true,
     });
-    const ordersByDay = Object.values(dateMap).sort((a, b) => (a.date > b.date ? 1 : -1));
 
+    // Fetch Stock Distribution (keep existing logic)
+    const warehouses = await Warehouse.findAll({
+      where: baseWhere,
+      attributes: ['id', 'name'],
+      raw: true,
+    });
+
+    // Fetch Top Selling Products (OrderItems)
+    const { OrderItem } = require('../models');
+    const orderItems = await OrderItem.findAll({
+      include: [
+        {
+          model: SalesOrder,
+          where: {
+            ...baseWhere,
+            createdAt: { [Op.gte]: startDate },
+            status: { [Op.notIn]: ['DRAFT', 'CANCELLED'] }
+          },
+          attributes: []
+        },
+        { model: Product, attributes: ['name', 'sku'] }
+      ]
+    });
+
+    // Process Orders by Day
+    const dateMap = {};
+    const today = new Date();
+    // Initialize last 30 days with 0
+    for (let i = 0; i < daysBack; i++) {
+      const d = new Date();
+      d.setDate(today.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      dateMap[dateStr] = { date: dateStr, count: 0, revenue: 0 }; // revenue, not totalAmount for chart
+    }
+
+    orders.forEach((o) => {
+      const d = o.createdAt ? new Date(o.createdAt).toISOString().slice(0, 10) : null;
+      if (!d || !dateMap[d]) return;
+      dateMap[d].count += 1;
+      dateMap[d].revenue += Number(o.totalAmount) || 0;
+    });
+    const salesTrend = Object.values(dateMap).sort((a, b) => (a.date > b.date ? 1 : -1));
+
+    // Process Orders by Status
     const statusMap = {};
-    (orders || []).forEach((o) => {
+    orders.forEach((o) => {
       const s = o.status || 'unknown';
       statusMap[s] = (statusMap[s] || 0) + 1;
     });
     const ordersByStatus = Object.entries(statusMap).map(([status, count]) => ({ status, count }));
 
-    const whStock = {};
-    (productStocks || []).forEach((ps) => {
-      const name = ps['Warehouse.name'] || whMap[ps.warehouseId] || 'Unknown';
-      whStock[name] = (whStock[name] || 0) + (Number(ps.quantity) || 0);
-    });
-    const stockByWarehouse = Object.entries(whStock).map(([warehouseName, quantity]) => ({ warehouseName, quantity }));
+    // Process Stock by Customer/Warehouse (Optional, simplified for now)
+    // ...
 
-    const productStock = {};
-    (productStocks || []).forEach((ps) => {
-      const key = ps['Product.id'];
-      if (!productStock[key]) productStock[key] = { productName: ps['Product.name'] || ps['Product.sku'] || 'Unknown', sku: ps['Product.sku'], quantity: 0 };
-      productStock[key].quantity += Number(ps.quantity) || 0;
+    // Process Top Selling Products
+    const productStats = {};
+    orderItems.forEach(item => {
+      const pid = item.productId;
+      if (!productStats[pid]) {
+        productStats[pid] = {
+          name: item.Product?.name || 'Unknown',
+          sku: item.Product?.sku || 'sku',
+          qty: 0,
+          revenue: 0
+        };
+      }
+      productStats[pid].qty += (item.quantity || 0);
+      productStats[pid].revenue += (Number(item.subtotal) || 0);
     });
-    const topProducts = Object.values(productStock)
-      .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 10);
+
+    const topProducts = Object.values(productStats)
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 5); // Start with Top 5 for dashboard widget
 
     res.json({
       success: true,
       data: {
-        ordersByDay,
+        salesTrend,
         ordersByStatus,
-        stockByWarehouse,
-        topProducts,
+        topProducts: topProducts.map(p => ({
+          name: p.name,
+          sku: p.sku,
+          sold: p.qty,
+          revenue: p.revenue
+        })),
+        // stockByWarehouse // Removed to save query time if not used on main dashboard yet
       },
     });
   } catch (err) {

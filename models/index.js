@@ -29,6 +29,7 @@ const ReplenishmentTask = require('./ReplenishmentTask');
 const ReplenishmentConfig = require('./ReplenishmentConfig');
 const Report = require('./Report');
 const Return = require('./Return');
+const VatCode = require('./VatCode');
 
 // Company
 Company.hasMany(User, { foreignKey: 'companyId' });
@@ -59,6 +60,8 @@ Company.hasMany(PurchaseOrder, { foreignKey: 'companyId' });
 PurchaseOrder.belongsTo(Company, { foreignKey: 'companyId' });
 Company.hasMany(GoodsReceipt, { foreignKey: 'companyId' });
 GoodsReceipt.belongsTo(Company, { foreignKey: 'companyId' });
+Company.hasMany(VatCode, { foreignKey: 'companyId' });
+VatCode.belongsTo(Company, { foreignKey: 'companyId' });
 
 // Product -> Supplier
 Supplier.hasMany(Product, { foreignKey: 'supplierId' });
@@ -220,4 +223,5 @@ module.exports = {
   ReplenishmentConfig,
   Report,
   Return,
+  VatCode,
 };

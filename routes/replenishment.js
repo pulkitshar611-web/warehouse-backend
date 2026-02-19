@@ -20,6 +20,7 @@ router.delete('/tasks/:id', requireRole(...repWriteRoles), replenishmentTaskCont
 // Configs (Settings)
 router.get('/configs', requireRole(...repRoles), replenishmentConfigController.list);
 router.get('/configs/auto-check', requireRole(...repRoles), replenishmentConfigController.runAutoCheck);
+router.post('/configs/auto-check', requireRole(...repWriteRoles), replenishmentConfigController.runAutoCheckAndCreateTasks);
 router.get('/configs/:id', requireRole(...repRoles), replenishmentConfigController.getById);
 router.post('/configs', requireRole(...repWriteRoles), replenishmentConfigController.create);
 router.put('/configs/:id', requireRole(...repWriteRoles), replenishmentConfigController.update);

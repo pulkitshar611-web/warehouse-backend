@@ -13,6 +13,7 @@ const { authenticate, requireSuperAdmin, requireRole } = require('./middlewares/
 const dashboardController = require('./controllers/dashboardController');
 const reportController = require('./controllers/reportController');
 const analyticsController = require('./controllers/analyticsController');
+const cronService = require('./services/cronService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -40,9 +41,14 @@ app.get('/api/dashboard/:type', authenticate, requireRole(...dashboardRoles), (r
 });
 app.get('/api/reports', authenticate, requireRole(...dashboardRoles), reportController.list);
 app.get('/api/reports/:id', authenticate, requireRole(...dashboardRoles), reportController.getById);
+app.get('/api/reports/:id/download', authenticate, requireRole(...dashboardRoles), reportController.download);
 app.post('/api/reports', authenticate, requireRole(...dashboardRoles), reportController.create);
 app.put('/api/reports/:id', authenticate, requireRole(...dashboardRoles), reportController.update);
 app.delete('/api/reports/:id', authenticate, requireRole(...dashboardRoles), reportController.remove);
+
+// AI / Predictions
+const predictionController = require('./controllers/predictionController');
+app.get('/api/predictions', authenticate, requireRole(...dashboardRoles), predictionController.list);
 
 // Analytics
 app.post('/api/analytics/pricing-calculate', authenticate, requireRole(...dashboardRoles), analyticsController.pricingCalculate);
@@ -91,6 +97,8 @@ app.use((err, req, res, next) => {
   });
 });
 
+
+
 async function start() {
   try {
     await sequelize.authenticate();
@@ -123,17 +131,16 @@ async function start() {
         }
       }
     }
-    if (sequelize.getDialect() === "sqlite") {
-      await sequelize.sync({ alter: true }); // ✅ Local SQLite
-    } else {
-      await sequelize.sync(); // ✅ Railway MySQL (NO alter)
-    }
-
-
+    // MySQL: skip alter to avoid "Too many keys" on tables that already have many indexes (e.g. users)
+    await sequelize.sync({ alter: dialect === 'sqlite' });
     if (dialect === 'sqlite') {
       await sequelize.query('PRAGMA foreign_keys = ON');
     }
     console.log('Database synced. IDs are now integers (1, 2, 3...).');
+
+    // Initialize Cron AFTER database sync is complete
+    cronService.init();
+
     app.listen(PORT, () => {
       console.log(`WMS Backend running at http://localhost:${PORT}`);
       console.log('Auth: POST /auth/login | GET /auth/me (Bearer token)');
@@ -152,6 +159,12 @@ async function start() {
     });
   } catch (err) {
     console.error('Unable to start server:', err);
+    const isConnectionRefused = err?.code === 'ECONNREFUSED' || err?.parent?.code === 'ECONNREFUSED' || err?.name === 'SequelizeConnectionRefusedError';
+    if (isConnectionRefused && (process.env.DB_DIALECT || 'sqlite') === 'mysql') {
+      console.error('\n--- MySQL connection refused ---');
+      console.error('Either: 1) Start MySQL (XAMPP/WAMP/MySQL service), or');
+      console.error('        2) Use SQLite: in .env set DB_DIALECT=sqlite (or remove DB_DIALECT) and restart.\n');
+    }
     process.exit(1);
   }
 }

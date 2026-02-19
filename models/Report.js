@@ -16,6 +16,7 @@ const Report = sequelize.define('Report', {
   format: { type: DataTypes.STRING, defaultValue: 'PDF', validate: { isIn: [['PDF', 'CSV', 'EXCEL']] } },
   schedule: { type: DataTypes.STRING, defaultValue: 'ONCE', validate: { isIn: [['ONCE', 'DAILY', 'WEEKLY', 'MONTHLY']] } },
   status: { type: DataTypes.STRING, defaultValue: 'COMPLETED', validate: { isIn: [['PENDING', 'COMPLETED', 'FAILED']] } },
+  content: { type: DataTypes.TEXT, allowNull: true },
   lastRunAt: { type: DataTypes.DATE, allowNull: true },
 }, {
   tableName: 'reports',

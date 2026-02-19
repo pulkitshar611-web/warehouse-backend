@@ -86,8 +86,10 @@ async function update(id, data, reqUser) {
   }
 
   // Shipped/Delivered hone ke baad inventory & product stock se quantity minus (sirf ek hi bar)
-  if (becomesShippedOrDelivered) {
+  if (becomesShippedOrDelivered && !shipment.stockDeducted) {
     const orderItems = await OrderItem.findAll({ where: { salesOrderId: order.id } });
+    let deductionCount = 0;
+
     for (const item of orderItems) {
       const pid = Number(item.productId) || 0;
       const qty = Number(item.quantity) || 0;
@@ -116,13 +118,20 @@ async function update(id, data, reqUser) {
           const deductQty = Math.min(qty, prevQty);
           if (deductQty > 0) {
             await stock.decrement('quantity', { by: deductQty });
+            // Explicitly touch updatedAt for "Last Movement" tracking
+            await stock.update({ updatedAt: new Date() });
             const newRes = Math.max(0, prevRes - deductQty);
             if (newRes !== prevRes) await stock.update({ reserved: newRes });
+            deductionCount++;
           }
         }
       } catch (err) {
         console.error('Shipment stock deduct failed for product', pid, err.message);
       }
+    }
+
+    if (deductionCount > 0) {
+      await shipment.update({ stockDeducted: true });
     }
   }
 
@@ -133,6 +142,11 @@ async function deductStockForShipment(shipmentId, reqUser) {
   const shipment = await Shipment.findByPk(Number(shipmentId) || shipmentId);
   if (!shipment) throw new Error('Shipment not found');
   if (reqUser.role !== 'super_admin' && shipment.companyId !== reqUser.companyId) throw new Error('Shipment not found');
+
+  if (shipment.stockDeducted) {
+    throw new Error('Stock already deducted for this shipment');
+  }
+
   const st = (shipment.deliveryStatus || '').toUpperCase();
   if (!['SHIPPED', 'IN_TRANSIT', 'DELIVERED'].includes(st)) throw new Error('Only shipped/delivered shipments can deduct stock');
 
@@ -167,6 +181,8 @@ async function deductStockForShipment(shipmentId, reqUser) {
         const deductQty = Math.min(qty, prevQty);
         if (deductQty > 0) {
           await stock.decrement('quantity', { by: deductQty });
+          // Explicitly touch updatedAt for "Last Movement" tracking
+          await stock.update({ updatedAt: new Date() });
           const newRes = Math.max(0, prevRes - deductQty);
           if (newRes !== prevRes) await stock.update({ reserved: newRes });
           deducted += 1;
@@ -176,6 +192,11 @@ async function deductStockForShipment(shipmentId, reqUser) {
       console.error('Deduct stock failed for product', pid, err.message);
     }
   }
+
+  if (deducted > 0) {
+    await shipment.update({ stockDeducted: true });
+  }
+
   return { message: deducted > 0 ? `Stock deducted for ${deducted} product(s). Refresh Inventory/Products.` : 'No stock records found. Ensure products have inventory (Stock).', deducted };
 }
 

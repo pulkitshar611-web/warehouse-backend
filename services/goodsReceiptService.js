@@ -140,6 +140,7 @@ async function updateReceived(id, body, reqUser) {
     stockWarning = 'No warehouse found. Create a warehouse (Warehouses → Add Warehouse) to update inventory stock.';
   }
   if (warehouseIds.length > 0 && (updated.GoodsReceiptItems || []).length > 0) {
+    const warehouseService = require('./warehouseService');
     for (const line of updated.GoodsReceiptItems) {
       const pid = Number(line.productId) || line.productId;
       const newReceived = Number(line.receivedQty) || 0;
@@ -149,6 +150,12 @@ async function updateReceived(id, body, reqUser) {
       const quality = (line.qualityStatus || '').toUpperCase();
       const qtyToAdd = quality === 'DAMAGED' ? 0 : delta;
       if (qtyToAdd <= 0) continue;
+
+      const whId = defaultWarehouseId; // GRN usually hits default warehouse if not specified
+      if (whId) {
+        await warehouseService.validateCapacity(whId, qtyToAdd);
+      }
+
       try {
         // Pehle is product ka koi existing stock record dhoondo (company ke kisi bhi warehouse me) — naya record mat banao jab tak existing na mile
         let stock = await ProductStock.findOne({

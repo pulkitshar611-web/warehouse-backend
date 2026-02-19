@@ -48,4 +48,16 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove };
+async function download(req, res, next) {
+  try {
+    const { filename, content, mimeType } = await reportService.download(req.params.id, req.user);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', mimeType);
+    res.send(content);
+  } catch (err) {
+    if (err.message === 'Report not found' || err.message === 'Report content not available') return res.status(404).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, download };

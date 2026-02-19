@@ -57,4 +57,13 @@ async function runAutoCheck(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, runAutoCheck };
+async function runAutoCheckAndCreateTasks(req, res, next) {
+  try {
+    const result = await replenishmentConfigService.runAutoCheckAndCreateTasks(req.user);
+    res.json({ success: true, data: result.suggestions, tasksCreated: result.tasksCreated, message: result.message });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, runAutoCheck, runAutoCheckAndCreateTasks };

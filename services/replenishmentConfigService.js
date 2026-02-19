@@ -1,4 +1,4 @@
-const { ReplenishmentConfig, Product, Company, ProductStock } = require('../models');
+const { ReplenishmentConfig, Product, Company, ProductStock, ReplenishmentTask, Warehouse, Zone, Location } = require('../models');
 const { Op } = require('sequelize');
 
 async function list(reqUser, query = {}) {
@@ -109,4 +109,53 @@ async function runAutoCheck(reqUser) {
   return { suggestions };
 }
 
-module.exports = { list, getById, create, update, remove, runAutoCheck };
+/** Run auto-check and create replenishment tasks when stock is below reorder point (e.g. pick location max 60, when stock < 20 → auto task) */
+async function runAutoCheckAndCreateTasks(reqUser) {
+  const { suggestions } = await runAutoCheck(reqUser);
+  if (suggestions.length === 0) return { suggestions, tasksCreated: 0, message: 'No products below reorder point' };
+
+  const companyId = reqUser.companyId || (suggestions[0] && suggestions[0].companyId);
+  if (!companyId) return { suggestions, tasksCreated: 0, message: 'Company context required to create tasks' };
+
+  const warehouses = await Warehouse.findAll({ where: { companyId }, attributes: ['id'] });
+  const whIds = warehouses.map((w) => w.id);
+  if (whIds.length === 0) return { suggestions, tasksCreated: 0, message: 'No warehouse found' };
+
+  const zones = await Zone.findAll({ where: { warehouseId: { [Op.in]: whIds } }, attributes: ['id'] });
+  const zoneIds = zones.map((z) => z.id);
+  if (zoneIds.length === 0) return { suggestions, tasksCreated: 0, message: 'No zones found' };
+
+  const locations = await Location.findAll({
+    where: { zoneId: { [Op.in]: zoneIds } },
+    attributes: ['id', 'locationType'],
+  });
+  const bulkLoc = locations.find((l) => (l.locationType || '').toUpperCase() === 'BULK');
+  const pickLoc = locations.find((l) => (l.locationType || '').toUpperCase() === 'PICK');
+  const fromLocationId = bulkLoc?.id || locations[0]?.id;
+  const toLocationId = pickLoc?.id || locations[1]?.id || locations[0]?.id;
+  if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) {
+    return { suggestions, tasksCreated: 0, message: 'Need at least 2 locations (e.g. BULK and PICK) to create replenishment tasks' };
+  }
+
+  const count = await ReplenishmentTask.count({ where: { companyId } });
+  let tasksCreated = 0;
+  for (let i = 0; i < suggestions.length; i++) {
+    const s = suggestions[i];
+    const taskNumber = `RPL-${String(count + tasksCreated + 1).padStart(6, '0')}`;
+    await ReplenishmentTask.create({
+      companyId,
+      productId: s.productId,
+      fromLocationId,
+      toLocationId,
+      taskNumber,
+      quantityNeeded: s.reorderQuantity || 1,
+      quantityCompleted: 0,
+      priority: 'MEDIUM',
+      status: 'PENDING',
+    });
+    tasksCreated++;
+  }
+  return { suggestions, tasksCreated, message: `Created ${tasksCreated} replenishment task(s)` };
+}
+
+module.exports = { list, getById, create, update, remove, runAutoCheck, runAutoCheckAndCreateTasks };

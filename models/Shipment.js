@@ -15,6 +15,7 @@ const Shipment = sequelize.define('Shipment', {
     defaultValue: 'READY_TO_SHIP',
     validate: { isIn: [['READY_TO_SHIP', 'SHIPPED', 'IN_TRANSIT', 'DELIVERED', 'FAILED', 'RETURNED']] },
   },
+  stockDeducted: { type: DataTypes.BOOLEAN, defaultValue: false },
 }, {
   tableName: 'shipments',
   timestamps: true,
